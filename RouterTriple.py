@@ -54,24 +54,14 @@ class TripleGrainFeatureRouter(nn.Module):
             raise NotImplementedError()
 
     def forward(self, h_fine, h_median, h_coarse, entropy=None):
-        print('old_c_0', h_coarse.shape)
-        print('old_m_0', h_median.shape)
-        print('old_f_0', h_fine.shape)
 
         h_fine = self.feature_norm_fine(h_fine)
         h_median = self.feature_norm_median(h_median)
         h_coarse = self.feature_norm_coarse(h_coarse)
 
-        print('old_c_1', h_coarse.shape)
-        print('old_m_1', h_median.shape)
-        print('old_f_1', h_fine.shape)
 
         avg_h_fine = self.gate_fine_pool(h_fine)
         avg_h_median = self.gate_median_pool(h_median)
-
-        print('old_c', h_coarse.shape)
-        print('old_m', avg_h_median.shape)
-        print('old_f', avg_h_fine.shape)
 
         h_logistic = torch.cat([h_coarse, avg_h_median, avg_h_fine], dim=1).permute(
             0, 2, 3, 1

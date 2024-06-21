@@ -80,27 +80,15 @@ class TripleGrainFeatureRouter(nn.Module):
             torch.Tensor: Routing gate tensor.
         """
         # Normalize the input feature maps
-
-        print('new_c_0', h_coarse.shape)
-        print('new_m_0', h_median.shape)
-        print('new_f_0', h_fine.shape)
-
         h_fine = self.feature_norm_fine(h_fine)
         h_median = self.feature_norm_median(h_median)
         h_coarse = self.feature_norm_coarse(h_coarse)
-        print('new_c_1', h_coarse.shape)
-        print('new_m_1', h_median.shape)
-        print('new_f_1', h_fine.shape)
-
 
         # Downsample fine and median features to match coarse resolution
         avg_h_fine = self.gate_fine_pool(h_fine)
         avg_h_median = self.gate_median_pool(h_median)
 
         # Concatenate features and apply the gate function
-        print('new_c', h_coarse.shape)
-        print('new_m', avg_h_median.shape)
-        print('new_f', avg_h_fine.shape)
 
         h_logistic = torch.cat(
             [h_coarse, avg_h_median, avg_h_fine], dim=1

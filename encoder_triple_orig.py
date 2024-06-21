@@ -12,7 +12,7 @@ import pytorch_lightning as pl
 from taming.diffusion_modules import (AttnBlock, Downsample, Normalize, ResnetBlock, nonlinearity)
 from dynamic_utils import instantiate_from_config
 
-class TripleGrainEncoder(pl.LightningModule):
+class TripleGrainEncoder(nn.Module):
     def __init__(self, 
         *, 
         ch, 
@@ -93,16 +93,13 @@ class TripleGrainEncoder(pl.LightningModule):
 
 
     def forward(self, x, x_entropy=None):
-        print('old', x.shape)
         assert x.shape[2] == x.shape[3] == self.resolution, "{}, {}, {}".format(x.shape[2], x.shape[3], self.resolution)
-
         # timestep embedding
         temb = None
 
         # downsampling
-        hs = [self.conv_in(x)]
-        print('old_hs', hs.shape)
-
+        hs = self.conv_in(x)
+    
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
@@ -117,6 +114,8 @@ class TripleGrainEncoder(pl.LightningModule):
                 h_fine = h
 
         h_coarse = hs[-1]
+        print("old_h_coarse", h_coarse.shape)
+
 
         ## coarse-grain
         h_coarse = self.mid_coarse.block_1(h_coarse, temb)

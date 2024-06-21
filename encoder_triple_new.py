@@ -8,11 +8,41 @@ import torch.nn.functional as F
 sys.path.append(os.getcwd())
 
 import pytorch_lightning as pl
-from taming.diffusion_modules import AttnBlock, Downsample, Normalize, ResnetBlock
-from dynamic_utils import instantiate_from_config
+from VQDC_testing.taming.diffusion_modules import AttnBlock, Downsample, Normalize, ResnetBlock
+from VQDC_testing.dynamic_utils import instantiate_from_config
 
 
 class TripleGrainEncoder(pl.LightningModule):
+    """
+    A Triple Grain Encoder for encoding images at three different resolutions (coarse, median, fine).
+
+    This encoder uses a U-Net-like architecture with downsampling blocks, middle layers, 
+    and a router to dynamically select the appropriate encoding resolution for each region.
+
+    Attributes:
+        ch (int): Base channel size for the encoder.
+        ch_mult (tuple of int): Channel multiplier for each downsampling level.
+        num_res_blocks (int): Number of residual blocks in each downsampling level.
+        attn_resolutions (list of int): Resolutions at which to apply attention blocks.
+        dropout (float): Dropout probability.
+        resamp_with_conv (bool): If True, use convolution for downsampling.
+        in_channels (int): Number of input channels (default: 3 for RGB).
+        resolution (int): Input image resolution.
+        z_channels (int): Number of channels in the encoded latent space.
+        router_config (dict): Configuration dictionary for the router module.
+
+    Args:
+        **ignore_kwargs: Allows passing arbitrary keyword arguments, which are ignored.
+            This is useful for compatibility with configurations that may contain extra keys.
+
+    Forward Pass Output:
+        dict: A dictionary containing:
+            - 'h_triple': The dynamically selected encoded representation at different resolutions.
+            - 'indices': Indices indicating the selected resolution for each region.
+            - 'codebook_mask': Mask indicating the scale of the selected codebook for each region.
+            - 'gate': The output probabilities of the router module.
+    """
+
     def __init__(
         self,
         *,
@@ -31,20 +61,22 @@ class TripleGrainEncoder(pl.LightningModule):
         super().__init__()
 
         self.ch = ch
-        self.temb_ch = 0
+        self.temb_ch = 0  # Placeholder for time embedding channels (not used)
         self.num_resolutions = len(ch_mult)
         self.num_res_blocks = num_res_blocks
         self.resolution = resolution
         self.in_channels = in_channels
+        self.z_channels = z_channels
 
-        self.conv_in = nn.Conv2d(
-            in_channels, self.ch, kernel_size=3, stride=1, padding=1
-        )
+        # Input convolution layer
+        self.conv_in = nn.Conv2d(in_channels, self.ch, kernel_size=3, stride=1, padding=1)
 
+        # Downsampling layers
         self.down, self.down_resolutions = self._make_downsampling_layers(
             ch, ch_mult, num_res_blocks, attn_resolutions, dropout, resamp_with_conv
         )
 
+        # Middle layers for each resolution (coarse, median, fine)
         self.mid_coarse = self._make_middle_layers(ch * ch_mult[-1], dropout)
         self.norm_out_coarse = Normalize(ch * ch_mult[-1])
         self.conv_out_coarse = nn.Conv2d(
@@ -65,11 +97,15 @@ class TripleGrainEncoder(pl.LightningModule):
             ch_fine, z_channels, kernel_size=3, stride=1, padding=1
         )
 
+        # Router module for dynamic resolution selection
         self.router = instantiate_from_config(router_config)
 
     def _make_downsampling_layers(
         self, ch, ch_mult, num_res_blocks, attn_resolutions, dropout, resamp_with_conv
     ):
+        """
+        Creates the downsampling layers for the encoder.
+        """
         down = nn.ModuleList()
         curr_res = self.resolution
         in_ch_mult = (1,) + tuple(ch_mult)
@@ -104,6 +140,9 @@ class TripleGrainEncoder(pl.LightningModule):
         return down, down_resolutions
 
     def _make_middle_layers(self, ch, dropout):
+        """
+        Creates the middle layers for each resolution.
+        """
         mid = nn.ModuleDict(
             {
                 "block_1": ResnetBlock(
@@ -124,38 +163,54 @@ class TripleGrainEncoder(pl.LightningModule):
         return mid
 
     def _apply_middle_layers(self, x, mid, temb):
+        """
+        Applies the middle layers to the input tensor.
+        """
         x = mid["block_1"](x, temb)
         x = mid["attn_1"](x)
         x = mid["block_2"](x, temb)
         return x
 
     def forward(self, x, x_entropy=None):
-        print('new', x.shape)
-
+        """
+        Forward pass of the Triple Grain Encoder.
+        """
         assert (
             x.shape[2] == x.shape[3] == self.resolution
-        ), f"{x.shape[2]}, {x.shape[3]}, {self.resolution}"
+        ), f"Input resolution mismatch: {x.shape[2]}, {x.shape[3]}, {self.resolution}"
 
+        # Placeholder for time embedding (not used)
         temb = None
 
+        # Initial convolution
         hs = [self.conv_in(x)]
-        print('new_hs', hs.shape)
-        for i_level, down in enumerate(self.down):
-            for i_block in range(self.num_res_blocks):
-                h = down["block"][i_block](hs[-1], temb)
-                if down["attn"]:
-                    h = down["attn"][i_block](h)
-                hs.append(h)
-            if i_level != self.num_resolutions - 1:
-                hs.append(down["downsample"](hs[-1]))
 
-            if i_level == self.num_resolutions - 2:
-                h_median = hs[-1]
-            elif i_level == self.num_resolutions - 3:
-                h_fine = hs[-1]
+        # Downsampling pathway
+        for resolution_level in range(self.num_resolutions):
+            for block_index in range(self.num_res_blocks):
+                current_output = self.down[resolution_level].block[block_index](
+                    hs[-1], temb
+                )
+                if self.down[resolution_level].attn:
+                    current_output = self.down[resolution_level].attn[block_index](
+                        current_output
+                    )
+                hs.append(current_output)
 
+            if resolution_level != self.num_resolutions - 1:
+                downsampled_output = self.down[resolution_level].downsample(hs[-1])
+                hs.append(downsampled_output)
+
+            # Store intermediate outputs for different resolutions
+            if resolution_level == self.num_resolutions - 2:
+                h_median = current_output
+            elif resolution_level == self.num_resolutions - 3:
+                h_fine = current_output
+
+        # Extract the coarsest level output
         h_coarse = hs[-1]
 
+        # Apply middle layers to each resolution
         h_coarse = self._apply_middle_layers(h_coarse, self.mid_coarse, temb)
         h_coarse = self.norm_out_coarse(h_coarse)
         h_coarse = F.silu(h_coarse)
@@ -171,6 +226,7 @@ class TripleGrainEncoder(pl.LightningModule):
         h_fine = F.silu(h_fine)
         h_fine = self.conv_out_fine(h_fine)
 
+        # Use the router to dynamically select the appropriate resolution
         gate = self.router(
             h_fine=h_fine, h_median=h_median, h_coarse=h_coarse, entropy=x_entropy
         )
@@ -179,6 +235,7 @@ class TripleGrainEncoder(pl.LightningModule):
         gate = gate.permute(0, 3, 1, 2)
         indices = gate.argmax(dim=1)
 
+        # Upsample the outputs to the finest resolution
         h_coarse = h_coarse.repeat_interleave(4, dim=-1).repeat_interleave(4, dim=-2)
         h_median = h_median.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
 
@@ -188,10 +245,12 @@ class TripleGrainEncoder(pl.LightningModule):
             .unsqueeze(1)
         )
 
+        # Combine the outputs based on the router's selection
         h_triple = torch.where(indices_repeat == 0, h_coarse, h_median)
         h_triple = torch.where(indices_repeat == 1, h_median, h_triple)
         h_triple = torch.where(indices_repeat == 2, h_fine, h_triple)
 
+        # Apply gradient scaling during training based on the router's output
         if self.training:
             gate_grad = gate.max(dim=1, keepdim=True)[0]
             gate_grad = gate_grad.repeat_interleave(4, dim=-1).repeat_interleave(
@@ -199,6 +258,7 @@ class TripleGrainEncoder(pl.LightningModule):
             )
             h_triple = h_triple * gate_grad
 
+        # Create a mask indicating the codebook scale for each region
         coarse_mask = 0.0625 * torch.ones_like(indices_repeat).to(x.device)
         median_mask = 0.25 * torch.ones_like(indices_repeat).to(x.device)
         fine_mask = 1.0 * torch.ones_like(indices_repeat).to(x.device)
